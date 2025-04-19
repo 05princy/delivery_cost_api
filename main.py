@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from pydantic import BaseModel
+from pydantic import RootModel
 from typing import Dict
 import uvicorn
 import itertools
@@ -31,12 +31,12 @@ def get_cost(a, b):
         return cost_matrix[(b, a)]
     return float('inf')
 
-class OrderRequest(BaseModel):
-    __root__: Dict[str, int]  # Dynamic keys for products
+class OrderRequest(RootModel):
+    root: Dict[str, int] # Dynamic keys for products
 
 @app.post("/calculate-cost")
 def calculate_cost(order: OrderRequest):
-    order_data = order.__root__
+    order_data = order.root
     required_items = {k for k, v in order_data.items() if v > 0}
 
     # Find which centers have which required items
