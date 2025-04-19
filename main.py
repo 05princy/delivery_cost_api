@@ -37,6 +37,15 @@ class Order(BaseModel):
     G: int = 0
     H: int = 0
     I: int = 0
+@app.post("/delivery-cost")
+def calculate_cost(order: Order):
+    # 🔁 Replace with your actual logic
+    total_items = sum([
+        order.A, order.B, order.C, order.D,
+        order.E, order.F, order.G, order.H, order.I
+    ])
+    cost = total_items * 10  # Dummy example
+    return {"total_cost": cost}
 
 def get_required_centers(order: Dict[str, int]) -> List[str]:
     required = set()
