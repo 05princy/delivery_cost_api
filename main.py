@@ -1,99 +1,85 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict
-import uvicorn
+from typing import Dict, List
 import itertools
 import math
 
 app = FastAPI()
 
-inventory = {
-    "C1": {"A", "B", "C", "G"},
-    "C2": {"B", "C", "D", "E", "G", "H", "I"},
-    "C3": {"C", "D", "E", "F", "G", "H", "I"}
-}
-
-weights = {
-    "A": 3, "B": 2, "C": 8,
-    "D": 12, "E": 25,
-    "F": 0.5, "G": 15,
-    "H": 1, "I": 2
+warehouse_stock_weights = {
+    "C1": {"A": 3, "B": 2, "C": 8},
+    "C2": {"D": 12, "E": 25, "F": 15},
+    "C3": {"G": 0.5, "H": 1, "I": 2}
 }
 
 distances = {
-    ("C1", "L1"): 4, ("L1", "C1"): 4,
-    ("C2", "L1"): 2.5, ("L1", "C2"): 2.5,
-    ("C3", "L1"): 3, ("L1", "C3"): 3,
-    ("C1", "C2"): 4, ("C2", "C1"): 4,
-    ("C1", "C3"): 3, ("C3", "C1"): 3,
-    ("C2", "C3"): 2, ("C3", "C2"): 2
+    ('C1', 'L1'): 3,
+    ('C2', 'L1'): 2.5,
+    ('C3', 'L1'): 2,
+    ('C1', 'C2'): 4,
+    ('C1', 'C3'): 5,
+    ('C2', 'C3'): 3,
 }
 
-def cost_per_km(weight: float) -> int:
-    if weight <= 5:
-        return 10
-    extra = math.ceil((weight - 5) / 5)
-    return 10 + (extra * 8)
+# Add reverse distances
+for (a, b), d in list(distances.items()):
+    distances[(b, a)] = d
 
-class OrderRequest(BaseModel):
-    __root__: Dict[str, int]
+class Order(BaseModel):
+    A: int = 0
+    B: int = 0
+    C: int = 0
+    D: int = 0
+    E: int = 0
+    F: int = 0
+    G: int = 0
+    H: int = 0
+    I: int = 0
 
-@app.post("/calculate-cost")
-def calculate_cost(order: OrderRequest):
-    order_items = {k: v for k, v in order.__root__.items() if v > 0}
-    required_products = set(order_items.keys())
+def get_required_centers(order: Dict[str, int]) -> List[str]:
+    required = set()
+    for center, stock in warehouse_stock_weights.items():
+        for item in order:
+            if item in stock and order[item] > 0:
+                required.add(center)
+    return list(required)
 
-    # Product availability map
-    product_locations = {
-        product: [c for c in inventory if product in inventory[c]]
-        for product in required_products
-    }
+def compute_cost(weight: float, distance: float) -> float:
+    if weight == 0:
+        return distance * 10
+    cost = 10 * distance
+    if weight > 5:
+        weight -= 5
+        blocks = math.ceil(weight / 5)
+        cost += blocks * 8 * distance
+    return cost
 
-    # Return 0 if any product is not found in any center
-    if any(len(locs) == 0 for locs in product_locations.values()):
-        return {"minimum_cost": 0}
+def get_items_by_center(center: str, order: Dict[str, int]) -> Dict[str, int]:
+    return {item: qty for item, qty in order.items() if item in warehouse_stock_weights[center] and qty > 0}
 
-    min_cost = float("inf")
+@app.post("/calculate")
+def calculate(order: Order):
+    order_dict = order.dict()
+    required_centers = get_required_centers(order_dict)
+    min_cost = float('inf')
 
-    # Generate all product -> center assignments
-    def generate_assignments(products, current={}):
-        if not products:
-            return [current]
-        product = products[0]
-        result = []
-        for center in product_locations[product]:
-            new_assign = current.copy()
-            new_assign[product] = center
-            result += generate_assignments(products[1:], new_assign)
-        return result
+    for perm in itertools.permutations(required_centers):
+        inventory = order_dict.copy()
+        cost = 0
+        for i, center in enumerate(perm):
+            items = get_items_by_center(center, inventory)
+            weight = sum(warehouse_stock_weights[center][k] * v for k, v in items.items())
+            dist_to_l1 = distances[(center, 'L1')]
+            cost += compute_cost(weight, dist_to_l1)
+            for k in items:
+                inventory[k] = 0
 
-    all_assignments = generate_assignments(list(order_items.keys()))
+            # Move from L1 to next center (empty vehicle)
+            if i < len(perm) - 1:
+                next_center = perm[i + 1]
+                cost += distances[("L1", next_center)] * 10
 
-    for assignment in all_assignments:
-        centers_involved = set(assignment.values())
-        for start_center in centers_involved:
-            other_centers = [c for c in centers_involved if c != start_center]
-            for perm in itertools.permutations(other_centers):
-                route = [start_center] + list(perm)
-                total_cost = 0
-                delivered = set()
-
-                for center in route:
-                    # Pick up items from current center
-                    delivery_items = [p for p, loc in assignment.items() if loc == center and p not in delivered]
-                    if delivery_items:
-                        weight = sum(weights[p] * order_items[p] for p in delivery_items)
-                        rate = cost_per_km(weight)
-                        dist = distances.get((center, "L1"), float("inf"))
-                        total_cost += rate * dist
-                        delivered.update(delivery_items)
-
-                    # Go to next center (L1 → next pickup)
-                    if center != route[-1]:
-                        next_center = route[route.index(center) + 1]
-                        total_cost += distances.get(("L1", next_center), float("inf"))
-
-                if total_cost < min_cost:
-                    min_cost = total_cost
+        if cost < min_cost:
+            min_cost = cost
 
     return {"minimum_cost": round(min_cost)}
